@@ -1,46 +1,44 @@
-import {
-  CognitoIdentityClient,
-  GetIdCommand,
-  GetCredentialsForIdentityCommand,
-} from "https://cdn.jsdelivr.net/npm/@aws-sdk/client-cognito-identity/+esm";
-import {
-  HealthClient,
-  DescribeEventsCommand,
-} from "https://cdn.jsdelivr.net/npm/@aws-sdk/client-health/+esm";
-
 const REGION = "us-east-2";
-const IDENTITY_POOL_ID = "us-east-2:irSuSW7ld";
-// const USER_POOL_DOMAIN = "http://localhost:3000";
+const USER_POOL_DOMAIN =
+  "http://us-east-2irsusw7ld.auth.us-east-2.amazoncognito.com";
 const CLIENT_ID = "6vn8g1jf6o3ir970ku0kn57okv";
-("cognito-idp.us-east-2.amazonaws.com/YOUR_USER_POOL_ID"); // Reemplazar
-const REDIRECT_URI = "http://localhost:3000";
+const REDIRECT_URI = "http://localhost:5173";
 
 function redirectToCognitoLogin() {
   const loginUrl = `${USER_POOL_DOMAIN}/login?response_type=token&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(
     REDIRECT_URI
   )}`;
-
   window.location.href = loginUrl;
 }
 
-function getTokenFromURL() {
+function getIdTokenFromUrl() {
   const hash = window.location.hash;
   const params = new URLSearchParams(hash.slice(1));
   return params.get("id_token");
 }
 
-async function obtenerEventos(credentials) {
-  const healthClient = new HealthClient({
-    region: REGION,
-    credentials: {
-      accessKeyId: credentials.AccessKeyId,
-      secretAccessKey: credentials.SecretKey,
-      sessionToken: credentials.SessionToken,
-    },
-  });
+function mostrarContenidoParaUsuario(token) {
+  const decoded = parseJwt(token);
+  document.getElementById("login-status").innerText = `Hola, ${decoded.email}`;
 
-  const result = await healthClient.send(new DescribeEventsCommand({}));
-  return result.events || [];
+  // Ejemplo de eventos simulados
+  const events = [
+    { service: "S3", statusCode: "OK" },
+    { service: "EC2", statusCode: "IMPAIRED" },
+    { service: "Lambda", statusCode: "OK" },
+    { service: "RDS", statusCode: "UNKNOWN" },
+  ];
+  actualizarKPI(events);
+}
+
+function parseJwt(token) {
+  try {
+    const base64Payload = token.split(".")[1];
+    const payload = atob(base64Payload);
+    return JSON.parse(payload);
+  } catch (err) {
+    return {};
+  }
 }
 
 function renderGrafico(data) {
@@ -70,58 +68,20 @@ function actualizarKPI(events) {
 
     const div = document.createElement("div");
     div.innerHTML = `<strong>${evt.service}</strong> - ${estado}`;
-
     contenedor.appendChild(div);
   });
 
   renderGrafico(estados);
 }
 
-async function federarConIdentityPool(idToken) {
-  const identityClient = new CognitoIdentityClient({ region: REGION });
-  const { IdentityId } = await identityClient.send(
-    new GetIdCommand({
-      IdentityPoolId: IDENTITY_POOL_ID,
-      Logins: {
-        "cognito-idp.us-east-2.amazonaws.com/YOUR_USER_POOL_ID": idToken,
-      },
-    })
-  );
-
-  const { Credentials } = await identityClient.send(
-    new GetCredentialsForIdentityCommand({
-      IdentityId,
-      Logins: {
-        "cognito-idp.us-east-2.amazonaws.com/YOUR_USER_POOL_ID": idToken,
-      },
-    })
-  );
-
-  return Credentials;
-}
-
-async function iniciarApp() {
-  const token = getTokenFromURL();
+function iniciarApp() {
+  const token = getIdTokenFromUrl();
   if (!token) {
     redirectToCognitoLogin();
     return;
   }
 
-  document.getElementById("login-status").innerText = "Logueado con Cognito.";
-
-  try {
-    const credentials = await federarConIdentityPool(token);
-    const events = await obtenerEventos(credentials);
-    actualizarKPI(events);
-
-    // Actualizar cada 5 minutos
-    setInterval(async () => {
-      const nuevosEventos = await obtenerEventos(credentials);
-      actualizarKPI(nuevosEventos);
-    }, 5 * 60 * 1000);
-  } catch (err) {
-    console.error("Error al obtener eventos:", err);
-  }
+  mostrarContenidoParaUsuario(token);
 }
 
 iniciarApp();
