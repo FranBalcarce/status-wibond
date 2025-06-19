@@ -1,4 +1,5 @@
-// main.js
+import { obtenerEventosDeSalud } from "./awsHealthClient.js";
+
 const REGION = "us-east-2";
 const USER_POOL_DOMAIN =
   "https://us-east-2irsusw7ld.auth.us-east-2.amazoncognito.com";
@@ -6,7 +7,7 @@ const CLIENT_ID = "6vn8g1jf6o3ir970ku0kn57okv";
 const REDIRECT_URI = "http://localhost:3000";
 
 function redirectToCognitoLogin() {
-  const scope = encodeURIComponent("email openid phone");
+  const scope = encodeURIComponent("openid email phone");
   const loginUrl = `${USER_POOL_DOMAIN}/login?client_id=${CLIENT_ID}&response_type=code&scope=${scope}&redirect_uri=${encodeURIComponent(
     REDIRECT_URI
   )}`;
@@ -24,6 +25,7 @@ function parseJwt(token) {
     const payload = atob(base64Payload);
     return JSON.parse(payload);
   } catch (err) {
+    console.error("Error al parsear el token:", err);
     return {};
   }
 }
@@ -42,22 +44,14 @@ async function exchangeCodeForToken(code) {
     }),
   });
 
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Error al obtener el token: ${err}`);
+  }
+
   const data = await response.json();
+  console.log("Tokens recibidos:", data);
   return data.id_token;
-}
-
-function mostrarContenidoParaUsuario(token) {
-  const decoded = parseJwt(token);
-  document.getElementById("login-status").innerText = `Hola, ${decoded.email}`;
-
-  // Datos de ejemplo
-  const events = [
-    { service: "S3", statusCode: "OK" },
-    { service: "EC2", statusCode: "IMPAIRED" },
-    { service: "Lambda", statusCode: "OK" },
-    { service: "RDS", statusCode: "UNKNOWN" },
-  ];
-  actualizarKPI(events);
 }
 
 function renderGrafico(data) {
@@ -93,6 +87,26 @@ function actualizarKPI(events) {
   renderGrafico(estados);
 }
 
+async function mostrarContenidoParaUsuario(token) {
+  const decoded = parseJwt(token);
+  document.getElementById("login-status").innerText = `Hola, ${
+    decoded.email || "usuario"
+  }`;
+
+  try {
+    const eventos = await obtenerEventosDeSalud(token);
+    const formateados = eventos.map((e) => ({
+      service: e.service || e.eventTypeCategory || "Desconocido",
+      statusCode: e.statusCode || "UNKNOWN",
+    }));
+    actualizarKPI(formateados);
+  } catch (error) {
+    console.error("Error al obtener eventos de servicios:", error);
+    document.getElementById("servicios").innerText =
+      "No se pudieron obtener los eventos de servicios.";
+  }
+}
+
 async function iniciarApp() {
   const code = getCodeFromUrl();
   if (!code) {
@@ -102,9 +116,12 @@ async function iniciarApp() {
 
   try {
     const token = await exchangeCodeForToken(code);
-    mostrarContenidoParaUsuario(token);
+    if (!token) {
+      throw new Error("El token recibido está vacío o indefinido.");
+    }
+    await mostrarContenidoParaUsuario(token);
   } catch (err) {
-    console.error("Error al intercambiar el código por el token:", err);
+    console.error("Error en la autenticación:", err);
     document.getElementById("login-status").innerText =
       "Error de autenticación.";
   }
