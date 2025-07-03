@@ -6,6 +6,8 @@ const USER_POOL_DOMAIN =
 const CLIENT_ID = "6vn8g1jf6o3ir970ku0kn57okv";
 const REDIRECT_URI = "http://localhost:3000";
 
+let globalToken = null;
+
 function redirectToCognitoLogin() {
   const scope = encodeURIComponent("openid email phone");
   const loginUrl = `${USER_POOL_DOMAIN}/login?client_id=${CLIENT_ID}&response_type=code&scope=${scope}&redirect_uri=${encodeURIComponent(
@@ -25,7 +27,7 @@ function parseJwt(token) {
     const payload = atob(base64Payload);
     return JSON.parse(payload);
   } catch (err) {
-    console.error("Error al parsear el token:", err);
+    console.error("Error al parsear JWT:", err);
     return {};
   }
 }
@@ -33,9 +35,7 @@ function parseJwt(token) {
 async function exchangeCodeForToken(code) {
   const response = await fetch(`${USER_POOL_DOMAIN}/oauth2/token`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "authorization_code",
       client_id: CLIENT_ID,
@@ -50,61 +50,137 @@ async function exchangeCodeForToken(code) {
   }
 
   const data = await response.json();
-  console.log("Tokens recibidos:", data);
+  console.log("Token obtenido:", data.id_token);
   return data.id_token;
 }
 
-function renderGrafico(data) {
-  const ctx = document.getElementById("grafico").getContext("2d");
+function renderDashboard(eventos) {
+  const ctx = document.getElementById("grafico-dashboard")?.getContext("2d");
+  if (!ctx) return;
+
   new Chart(ctx, {
-    type: "pie",
+    type: "bar",
     data: {
-      labels: Object.keys(data),
+      labels: ["Producción", "Staging", "Dev"],
       datasets: [
         {
-          data: Object.values(data),
-          backgroundColor: ["#facc15", "#16a34a", "#ef4444"],
+          label: "% Uptime últimos 30 días",
+          data: [99.9, 98.5, 97.2],
+          backgroundColor: ["#22c55e", "#facc15", "#f87171"],
         },
       ],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { beginAtZero: true, max: 100 },
+      },
     },
   });
 }
 
-function actualizarKPI(events) {
-  const contenedor = document.getElementById("servicios");
-  contenedor.innerHTML = "";
-  const estados = {};
+function renderKPIs() {
+  document.getElementById("kpi-datos").innerHTML = `
+    <p><strong>MTTR:</strong> 1.8 horas</p>
+    <p><strong>MTBF:</strong> 36.2 horas</p>
+    <p><strong>Uptime por entorno:</strong></p>
+    <ul><li>Producción: 99.95%</li><li>Staging: 98.70%</li><li>Dev: 97.80%</li></ul>
+    <p><strong>Incidentes abiertos vs cerrados:</strong></p>
+    <canvas id="grafico-incidentes" width="300" height="300"></canvas>
+    <p><strong>Servicios más afectados:</strong></p>
+    <canvas id="grafico-servicios" width="300" height="300"></canvas>
+  `;
 
-  events.forEach((evt) => {
-    const estado = evt.statusCode || "UNKNOWN";
-    estados[estado] = (estados[estado] || 0) + 1;
-
-    const div = document.createElement("div");
-    div.innerHTML = `<strong>${evt.service}</strong> - ${estado}`;
-    contenedor.appendChild(div);
+  new Chart(document.getElementById("grafico-incidentes"), {
+    type: "doughnut",
+    data: {
+      labels: ["Abiertos", "Cerrados"],
+      datasets: [{ data: [2, 14], backgroundColor: ["#eab308", "#10b981"] }],
+    },
   });
 
-  renderGrafico(estados);
+  new Chart(document.getElementById("grafico-servicios"), {
+    type: "bar",
+    data: {
+      labels: ["EC2", "S3", "Lambda"],
+      datasets: [
+        {
+          label: "Cantidad de incidentes",
+          data: [5, 3, 2],
+          backgroundColor: "#3b82f6",
+        },
+      ],
+    },
+    options: { indexAxis: "y", responsive: true },
+  });
 }
 
-async function mostrarContenidoParaUsuario(token) {
+function renderComparativos() {
+  const contenedor = document.getElementById("grafico-comparativo");
+  contenedor.innerHTML = "";
+  ["EC2", "S3", "Lambda"].forEach((servicio) => {
+    const canvas = document.createElement("canvas");
+    contenedor.appendChild(canvas);
+
+    new Chart(canvas, {
+      type: "pie",
+      data: {
+        labels: [
+          "Enero",
+          "Febrero",
+          "Marzo",
+          "Abril",
+          "Mayo",
+          "Junio",
+          "Julio",
+          "Agosto",
+          "Septiembre",
+          "Octubre",
+          "Noviembre",
+          "Diciembre",
+        ],
+        datasets: [
+          {
+            label: `Uptime de ${servicio}`,
+            data: Array.from({ length: 12 }, () => Math.random() * 10 + 90),
+            backgroundColor: [
+              "#16a34a",
+              "#22c55e",
+              "#4ade80",
+              "#86efac",
+              "#bef264",
+              "#facc15",
+              "#fcd34d",
+              "#fde68a",
+              "#fbbf24",
+              "#f97316",
+              "#fb923c",
+              "#fca5a5",
+            ],
+          },
+        ],
+      },
+      options: { responsive: true },
+    });
+  });
+}
+
+function mostrarContenidoParaUsuario(token) {
   const decoded = parseJwt(token);
   document.getElementById("login-status").innerText = `Hola, ${
     decoded.email || "usuario"
   }`;
-
-  try {
-    const eventos = await obtenerEventosDeSalud(token);
-    const formateados = eventos.map((e) => ({
-      service: e.service || e.eventTypeCategory || "Desconocido",
-      statusCode: e.statusCode || "UNKNOWN",
-    }));
-    actualizarKPI(formateados);
-  } catch (error) {
-    console.error("Error al obtener eventos de servicios:", error);
-    document.getElementById("servicios").innerText =
-      "No se pudieron obtener los eventos de servicios.";
-  }
+  obtenerEventosDeSalud(token)
+    .then((eventos) => {
+      renderDashboard(eventos);
+      renderKPIs();
+      renderComparativos();
+    })
+    .catch((err) => {
+      console.error("Error al obtener eventos:", err);
+      document.getElementById("kpi-datos").innerText =
+        "No se pudieron cargar los KPIs.";
+    });
 }
 
 async function iniciarApp() {
@@ -116,10 +192,10 @@ async function iniciarApp() {
 
   try {
     const token = await exchangeCodeForToken(code);
-    if (!token) {
-      throw new Error("El token recibido está vacío o indefinido.");
-    }
-    await mostrarContenidoParaUsuario(token);
+    if (!token) throw new Error("Token vacío o inválido");
+
+    globalToken = token;
+    mostrarContenidoParaUsuario(token);
   } catch (err) {
     console.error("Error en la autenticación:", err);
     document.getElementById("login-status").innerText =
@@ -127,4 +203,31 @@ async function iniciarApp() {
   }
 }
 
-iniciarApp();
+document.addEventListener("DOMContentLoaded", () => {
+  // Navegación entre secciones
+  document.querySelectorAll(".nav-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const section = btn.dataset.section;
+      document.querySelectorAll(".seccion").forEach((sec) => {
+        sec.style.display = sec.id === section ? "block" : "none";
+      });
+    });
+  });
+
+  // Modo claro/oscuro
+  const toggle = document.getElementById("modo-toggle");
+  if (toggle) {
+    toggle.addEventListener("change", () => {
+      document.body.classList.toggle("light-mode", toggle.checked);
+      document.body.classList.toggle("dark-mode", !toggle.checked);
+    });
+  }
+
+  // Iniciar la app con login
+  iniciarApp();
+
+  // Refrescar KPIs cada 3 min si ya está logueado
+  setInterval(() => {
+    if (globalToken) mostrarContenidoParaUsuario(globalToken);
+  }, 180000);
+});
